@@ -1,0 +1,1 @@
+{"identifier":"main-ui","description":"Only the local browser interface may call native commands.","webviews":["main"],"permissions":["core:default"]}
