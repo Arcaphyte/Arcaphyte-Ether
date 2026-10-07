@@ -1,63 +1,911 @@
-import React,{useEffect,useRef,useState} from 'react';
-import {createRoot} from 'react-dom/client';
-import {invoke,isTauri} from '@tauri-apps/api/core';
-import {listen} from '@tauri-apps/api/event';
-import {ArrowLeft,ArrowRight,RotateCw,Plus,X,Search,Home,Star,Settings,UserRound,Palette,Globe,Compass,Trash2,ExternalLink} from 'lucide-react';
-import {PRESET_THEMES,ThemeConfig,applyThemeToDOM,FONT_PRESET_PAIRINGS,applyFontPresetToTheme} from './themes';
-import {ENGINES,resolveAddress,validTemplate} from './navigation.mjs';
-import './style.css';
-type Bookmark={title:string,url:string};
-type Profile={id:string,name:string,icon:string,engine:string,customEngine:string,theme:ThemeConfig,bookmarks:Bookmark[]};
-type Tab={id:string,title:string,url:string,loading?:boolean};
-const etherTheme:ThemeConfig={...PRESET_THEMES[0],id:'ether-sky',name:'Ether Sky',accentColor:'#0284c7',accentHover:'#0369a1',accentInk:'#7dd3fc',secondaryAccent:'#bae6fd'};
-const presets=[etherTheme,...PRESET_THEMES];
-const uid=()=>crypto.randomUUID();
-const freshProfile=():Profile=>({id:uid(),name:'Explorer',icon:'✦',engine:'duckduckgo',customEngine:'https://duckduckgo.com/?q={query}',theme:etherTheme,bookmarks:[{title:'Arcaphyte',url:'https://www.arcaphyte.com'},{title:'Wikipedia',url:'https://www.wikipedia.org'},{title:'GitHub',url:'https://github.com'}]});
-function load():Profile[]{try {const p=JSON.parse(localStorage.getItem('ether.profiles')||'null');if(Array.isArray(p)&&p.length&&p.every(v=>v.id&&v.name&&v.theme&&Array.isArray(v.bookmarks)))return p;}catch{}return [freshProfile()];}
-const newTab=():Tab=>({id:uid(),title:'New tab',url:''});
-function App(){
- const [profiles,setProfiles]=useState<Profile[]>(load);const [profileId,setProfileId]=useState(()=>localStorage.getItem('ether.active')||'');
- const profile=profiles.find(p=>p.id===profileId)||profiles[0];
- const [tabs,setTabs]=useState<Tab[]>(()=>[newTab()]);const [active,setActive]=useState('');const tab=tabs.find(t=>t.id===active)||tabs[0];
- const [address,setAddress]=useState('');const [query,setQuery]=useState('');const [panel,setPanel]=useState('');const [error,setError]=useState('');
- const [themeName,setThemeName]=useState('My Ether theme');const [savedThemes,setSavedThemes]=useState<ThemeConfig[]>(()=>{try{return JSON.parse(localStorage.getItem('ether.themes')||'[]')}catch{return []}});
- const addressRef=useRef<HTMLInputElement>(null);const host=useRef<HTMLDivElement>(null);const liveTabs=useRef(new Set<string>());const queue=useRef(Promise.resolve());
- const engine=profile.engine==='custom'?{name:'Custom search',template:profile.customEngine}:ENGINES.find(e=>e.id===profile.engine)||ENGINES[0];
- const update=(patch:Partial<Profile>)=>setProfiles(ps=>ps.map(p=>p.id===profile.id?{...p,...patch}:p));
- function native(command:string,args:Record<string,unknown>={}){if(!isTauri())return Promise.resolve();return invoke(command,args).catch(e=>{setError(String(e));throw e});}
- useEffect(()=>{try{localStorage.setItem('ether.profiles',JSON.stringify(profiles));localStorage.setItem('ether.active',profile.id)}catch{setError('Your local storage is full. Try a smaller profile icon.')}applyThemeToDOM(profile.theme)},[profiles,profile.id]);
- useEffect(()=>{localStorage.setItem('ether.themes',JSON.stringify(savedThemes))},[savedThemes]);
- useEffect(()=>{setAddress(tab.url)},[tab.id,tab.url]);
- useEffect(()=>{if(!isTauri())return;const unlisten=listen<{id:string,url?:string,title?:string,loading?:boolean,popup?:string}>('browser-update',({payload:p})=>{
- if(p.popup){const t={...newTab(),url:p.popup,title:new URL(p.popup).hostname};setTabs(ts=>[...ts,t]);setActive(t.id);return;}
- setTabs(ts=>ts.map(t=>t.id===p.id?{...t,...(p.url?{url:p.url}:{}),...(p.title?{title:p.title}:{}),...(p.loading!==undefined?{loading:p.loading}:{})}:t));
- });return()=>{unlisten.then(fn=>fn())}},[]);
- useEffect(()=>{if(!isTauri())return;let cancelled=false;queue.current=queue.current.catch(()=>{}).then(async()=>{
- if(cancelled)return;
- const r=host.current?.getBoundingClientRect();if(!r)return;
- if(tab.url&&!liveTabs.current.has(tab.id)){await native('create_tab',{id:tab.id,profile:profile.id,url:tab.url,x:r.x,y:r.y,width:r.width,height:r.height});liveTabs.current.add(tab.id);}
- await native('show_tab',{id:panel?'':tab.url?tab.id:'',x:r.x,y:r.y,width:r.width,height:r.height});
- }).catch(()=>{});return()=>{cancelled=true}},[tab.id,tab.url,panel,profile.id]);
- useEffect(()=>{const resize=()=>{const r=host.current?.getBoundingClientRect();if(r)void native('resize_tabs',{x:r.x,y:r.y,width:r.width,height:r.height}).catch(()=>{})};window.addEventListener('resize',resize);return()=>window.removeEventListener('resize',resize)},[]);
- function addTab(){const t=newTab();setTabs(ts=>[...ts,t]);setActive(t.id);setPanel('');setQuery('')}
- function closeTab(id:string){if(liveTabs.current.has(id)){void native('close_tab',{id}).catch(()=>{});liveTabs.current.delete(id)}setTabs(ts=>{const remaining=ts.filter(t=>t.id!==id);return remaining.length?remaining:[newTab()]});}
- async function go(value:string){try{const url=resolveAddress(value,engine.template);setError('');setPanel('');if(liveTabs.current.has(tab.id))await native('navigate',{id:tab.id,url});setTabs(ts=>ts.map(t=>t.id===tab.id?{...t,url,title:new URL(url).hostname}:t));}catch(e){setError(String(e))}}
- function home(){if(liveTabs.current.has(tab.id)){void native('close_tab',{id:tab.id}).catch(()=>{});liveTabs.current.delete(tab.id)}setTabs(ts=>ts.map(t=>t.id===tab.id?{...t,url:'',title:'New tab'}:t));setPanel('')}
- function switchProfile(id:string){tabs.forEach(t=>{if(liveTabs.current.has(t.id))void native('close_tab',{id:t.id}).catch(()=>{})});liveTabs.current.clear();setProfileId(id);const t=newTab();setTabs([t]);setActive(t.id);setPanel('')}
- useEffect(()=>{const key=(e:KeyboardEvent)=>{if(e.ctrlKey||e.metaKey){if(e.key==='l'){e.preventDefault();addressRef.current?.focus();addressRef.current?.select()}if(e.key==='t'){e.preventDefault();addTab()}if(e.key==='w'){e.preventDefault();closeTab(tab.id)}}if(e.key==='Escape')setPanel('')};window.addEventListener('keydown',key);return()=>window.removeEventListener('keydown',key)},[tab.id]);
- function bookmark(){if(!tab.url)return;const has=profile.bookmarks.some(b=>b.url===tab.url);update({bookmarks:has?profile.bookmarks.filter(b=>b.url!==tab.url):[...profile.bookmarks,{title:tab.title,url:tab.url}]})}
- const icon=(p:Profile)=>p.icon.startsWith('data:image/')?<img className="avatar" src={p.icon} alt=""/>:<span className="avatar glyph">{p.icon}</span>;
- return <div className="app"><aside className="rail"><img className="rail-logo" src="/ether.svg" alt="Ether"/><button aria-label="Home" title="Home" onClick={home}><Compass/></button><button aria-label="Bookmarks" title="Bookmarks" onClick={()=>setPanel(panel==='bookmarks'?'':'bookmarks')}><Star/></button><div className="rail-line"/><button aria-label="Themes" title="Themes" onClick={()=>setPanel('themes')}><Palette/></button><div className="rail-spacer"/><button aria-label="Settings" title="Settings" onClick={()=>setPanel('settings')}><Settings/></button><button aria-label="Profiles" title="Profiles" onClick={()=>setPanel('profiles')}>{icon(profile)}</button></aside>
- <div className="workspace"><header><div className="tabs" role="tablist" aria-label="Browser tabs">{tabs.map(t=><div className={'tab '+(tab.id===t.id?'selected':'')} key={t.id}><button role="tab" aria-selected={tab.id===t.id} onClick={()=>setActive(t.id)}><Globe size={13}/><span>{t.title}</span></button><button aria-label={'Close '+t.title} onClick={()=>closeTab(t.id)}><X size={13}/></button></div>)}<button className="add-tab" aria-label="New tab" onClick={addTab}><Plus size={17}/></button><span className="edition">ETHER <span>PREVIEW</span></span></div>
- <div className="toolbar"><button aria-label="Back" disabled={!tab.url} onClick={()=>void native('tab_action',{id:tab.id,action:'back'}).catch(()=>{})}><ArrowLeft/></button><button aria-label="Forward" disabled={!tab.url} onClick={()=>void native('tab_action',{id:tab.id,action:'forward'}).catch(()=>{})}><ArrowRight/></button><button aria-label="Reload" disabled={!tab.url} onClick={()=>void native('tab_action',{id:tab.id,action:'reload'}).catch(()=>{})}><RotateCw className={tab.loading?'spinning':''}/></button><button aria-label="Go home" onClick={home}><Home/></button><form className="address" onSubmit={e=>{e.preventDefault();void go(address)}}><Globe size={15}/><input ref={addressRef} aria-label="Address or search" value={address} onChange={e=>setAddress(e.target.value)} placeholder={`Search with ${engine.name} or enter address`}/></form><button aria-label="Bookmark this page" aria-pressed={profile.bookmarks.some(b=>b.url===tab.url)} disabled={!tab.url} onClick={bookmark}><Star/></button><button className="profile-button" onClick={()=>setPanel('profiles')}>{icon(profile)}<span>{profile.name}</span></button></div>
- <div className="bookmark-bar">{profile.bookmarks.map(b=><button key={b.url} onClick={()=>void go(b.url)}><span className="bookmark-dot"/>{b.title}</button>)}</div></header>
- {error&&<div role="alert" className="error">{error}<button aria-label="Dismiss error" onClick={()=>setError('')}><X size={14}/></button></div>}
- <main ref={host} className="content">{!tab.url?<div className="start-page"><div className="topline"><span>YOUR WINDOW TO WHAT’S NEXT</span><span>arcaphyte.</span></div><section className="hero"><div className="hero-copy"><div className="eyebrow"><span/> A LITTLE CURIOSITY. ENDLESS POSSIBILITY.</div><h1>A world waiting<br/>to be <em>discovered.</em></h1><p>Follow a thought. Find a new perspective.<br/>Make a little room for the unexpected.</p><form className="search" onSubmit={e=>{e.preventDefault();void go(query)}}><Search size={20}/><input aria-label="Search the web" value={query} onChange={e=>setQuery(e.target.value)} placeholder="Where will your curiosity take you?"/><button aria-label="Search" type="submit"><ArrowRight size={21}/></button></form><button className="engine-note" onClick={()=>setPanel('settings')}>Searching with {engine.name} <Settings size={11}/></button></div><div className="crystal-scene"><div className="orbit one"/><div className="orbit two"/><span className="spark s1">+</span><span className="spark s2">+</span><img src="/ether.svg" alt="Faceted blue Ether crystal"/><span className="art-caption">04 / THE ARCAPHYTE COLLECTION</span></div></section><section className="shortcuts"><div className="section-label"><span>FAMILIAR PLACES</span><button onClick={()=>setPanel('bookmarks')}>Your bookmarks <ArrowRight size={13}/></button></div><div className="shortcut-grid">{profile.bookmarks.map((b,i)=><button className="shortcut" key={b.url} onClick={()=>void go(b.url)}><span className="shortcut-icon">{b.title.slice(0,1)}</span><div><strong>{b.title}</strong><small>{new URL(b.url).hostname}</small></div><ExternalLink size={14}/></button>)}<button className="shortcut new" onClick={()=>setPanel('bookmarks')}><Plus size={21}/><span>Add a favorite</span></button></div></section><footer><span>Thoughtfully made. Yours to make your own.</span><button onClick={()=>setPanel('themes')}><Palette size={14}/> Make Ether yours</button></footer></div>:<div className="web-placeholder">{!isTauri()?<><Globe size={40}/><h2>Desktop browser preview</h2><p>Websites open inside Chromium in the installed app.</p><a href={tab.url} target="_blank" rel="noreferrer">Open this page in your browser <ExternalLink size={14}/></a></>:<p>Loading {tab.title}…</p>}</div>}
- {panel&&<div className="panel-backdrop"><section className="panel" role="dialog" aria-modal="true" aria-label={panel}><div className="panel-heading"><div><span className="eyebrow">MAKE IT YOURS</span><h2>{panel==='profiles'?'Your own corner of the web':panel==='themes'?'A different point of view':panel==='bookmarks'?'Keep your favorite places':'Set your direction'}</h2></div><button aria-label="Close settings" onClick={()=>setPanel('')}><X/></button></div>
- {panel==='profiles'&&<><p>Local profiles keep their own name, icon, settings, bookmarks, and browsing storage. No Arcaphyte account needed.</p><div className="profile-list">{profiles.map(p=><button key={p.id} aria-pressed={p.id===profile.id} onClick={()=>switchProfile(p.id)}>{icon(p)}{p.name}</button>)}<button onClick={()=>{const p=freshProfile();p.name='New explorer';setProfiles(ps=>[...ps,p]);switchProfile(p.id)}}><Plus size={16}/>New profile</button></div><label>Profile name<input value={profile.name} maxLength={40} onChange={e=>update({name:e.target.value})}/></label><label>Your icon<div className="icon-choices">{['✦','☾','❖','✿','◈','☀'].map(s=><button key={s} onClick={()=>update({icon:s})}>{s}</button>)}</div><input aria-label="Upload profile icon" type="file" accept="image/png,image/jpeg,image/webp" onChange={e=>{const f=e.target.files?.[0];if(!f)return;if(f.size>1024*1024){setError('Choose an icon smaller than 1 MB.');return}const reader=new FileReader();reader.onload=()=>update({icon:String(reader.result)});reader.readAsDataURL(f)}}/></label></>}
- {panel==='settings'&&<><p>Choose the search engine used by the address bar and your start page.</p><label>Search engine<select value={profile.engine} onChange={e=>update({engine:e.target.value})}>{ENGINES.map(e=><option key={e.id} value={e.id}>{e.name}</option>)}<option value="custom">Custom search engine</option></select></label>{profile.engine==='custom'&&<label>HTTPS search URL — use {'{query}'} for your search<input value={profile.customEngine} onChange={e=>update({customEngine:e.target.value})}/>{!validTemplate(profile.customEngine)&&<small role="alert">Enter an HTTPS URL containing {'{query}'}.</small>}</label>}<div className="info-card"><h3>Arcaphyte Ether · 0.1 preview</h3><p>Free to use. No sign-in or activation key. Built with React, Rust, Tauri, and Chromium.</p><p>This early framework uses Tauri 3 alpha. The current Windows CEF runtime does not provide Chromium process sandboxing. Use this preview for testing, not sensitive everyday browsing.</p></div></>}
- {panel==='themes'&&<><p>The same palettes and typography as Weaver, with a little Ether of its own.</p><div className="theme-grid">{[...presets,...savedThemes].map(t=><button key={t.id} aria-pressed={profile.theme.id===t.id} onClick={()=>update({theme:t})}><span className="theme-swatch" style={{background:t.workspaceBg}}><i style={{background:t.accentColor}}/><i style={{background:t.textPrimary}}/><i style={{background:t.cardBg}}/></span>{t.name}</button>)}</div><h3>Make a custom theme</h3><div className="color-grid">{(['workspaceBg','sidebarBg','cardBg','accentColor','textPrimary','textSecondary'] as const).map(k=><label key={k}>{({workspaceBg:'Background',sidebarBg:'Sidebar',cardBg:'Cards',accentColor:'Accent',textPrimary:'Text',textSecondary:'Secondary text'})[k]}<input type="color" value={profile.theme[k]} onChange={e=>update({theme:{...profile.theme,[k]:e.target.value,id:'custom-draft',isCustom:true}})}/></label>)}</div><label>Typography<select value={profile.theme.fontPresetId||'classic-literary'} onChange={e=>update({theme:applyFontPresetToTheme(profile.theme,e.target.value)})}>{FONT_PRESET_PAIRINGS.map(f=><option key={f.id} value={f.id}>{f.name}</option>)}</select></label><div className="inline"><input aria-label="Custom theme name" value={themeName} onChange={e=>setThemeName(e.target.value)}/><button className="primary" onClick={()=>{const t={...profile.theme,id:uid(),name:themeName.trim()||'Custom theme',isCustom:true};setSavedThemes(ts=>[...ts,t]);update({theme:t})}}>Save theme</button></div></>}
- {panel==='bookmarks'&&<><p>A few good starting points, always close at hand.</p>{profile.bookmarks.map(b=><div className="bookmark-row" key={b.url}><button onClick={()=>void go(b.url)}><Globe size={17}/><span>{b.title}<small>{b.url}</small></span></button><button aria-label={'Remove '+b.title} onClick={()=>update({bookmarks:profile.bookmarks.filter(x=>x.url!==b.url)})}><Trash2 size={16}/></button></div>)}<form className="bookmark-form" onSubmit={e=>{e.preventDefault();const f=new FormData(e.currentTarget);try{const url=resolveAddress(String(f.get('url')),engine.template);update({bookmarks:[...profile.bookmarks.filter(b=>b.url!==url),{url,title:String(f.get('title')).trim()||new URL(url).hostname}]});e.currentTarget.reset()}catch(err){setError(String(err))}}}><label>Name<input name="title" required maxLength={60}/></label><label>Website address<input name="url" required placeholder="https://"/></label><button className="primary">Add bookmark</button></form></>}
- </section></div>}</main></div></div>
+import React, { useEffect, useRef, useState } from "react";
+import { createRoot } from "react-dom/client";
+import { invoke, isTauri } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import {
+  ArrowLeft,
+  ArrowRight,
+  RotateCw,
+  Plus,
+  X,
+  Search,
+  Home,
+  Star,
+  Settings,
+  UserRound,
+  Palette,
+  Globe,
+  Compass,
+  Trash2,
+  ExternalLink,
+} from "lucide-react";
+import {
+  PRESET_THEMES,
+  ThemeConfig,
+  applyThemeToDOM,
+  FONT_PRESET_PAIRINGS,
+  applyFontPresetToTheme,
+} from "./themes";
+import { ENGINES, resolveAddress, validTemplate } from "./navigation.mjs";
+import "./style.css";
+type Bookmark = { title: string; url: string };
+type Profile = {
+  id: string;
+  name: string;
+  icon: string;
+  engine: string;
+  customEngine: string;
+  theme: ThemeConfig;
+  bookmarks: Bookmark[];
+};
+type Tab = { id: string; title: string; url: string; loading?: boolean };
+const etherTheme: ThemeConfig = {
+  ...PRESET_THEMES[0],
+  id: "ether-sky",
+  name: "Ether Sky",
+  accentColor: "#0284c7",
+  accentHover: "#0369a1",
+  accentInk: "#7dd3fc",
+  secondaryAccent: "#bae6fd",
+};
+const presets = [etherTheme, ...PRESET_THEMES];
+const uid = () => crypto.randomUUID();
+const freshProfile = (): Profile => ({
+  id: uid(),
+  name: "Explorer",
+  icon: "✦",
+  engine: "duckduckgo",
+  customEngine: "https://duckduckgo.com/?q={query}",
+  theme: etherTheme,
+  bookmarks: [
+    { title: "Arcaphyte", url: "https://www.arcaphyte.com" },
+    { title: "Wikipedia", url: "https://www.wikipedia.org" },
+    { title: "GitHub", url: "https://github.com" },
+  ],
+});
+function load(): Profile[] {
+  try {
+    const p = JSON.parse(localStorage.getItem("ether.profiles") || "null");
+    if (
+      Array.isArray(p) &&
+      p.length &&
+      p.every((v) => v.id && v.name && v.theme && Array.isArray(v.bookmarks))
+    )
+      return p;
+  } catch {}
+  return [freshProfile()];
 }
-createRoot(document.getElementById('root')!).render(<App/>);
+const newTab = (): Tab => ({ id: uid(), title: "New tab", url: "" });
+function App() {
+  const [profiles, setProfiles] = useState<Profile[]>(load);
+  const [profileId, setProfileId] = useState(
+    () => localStorage.getItem("ether.active") || "",
+  );
+  const profile = profiles.find((p) => p.id === profileId) || profiles[0];
+  const [tabs, setTabs] = useState<Tab[]>(() => [newTab()]);
+  const [active, setActive] = useState("");
+  const tab = tabs.find((t) => t.id === active) || tabs[0];
+  const [address, setAddress] = useState("");
+  const [query, setQuery] = useState("");
+  const [panel, setPanel] = useState("");
+  const [error, setError] = useState("");
+  const [themeName, setThemeName] = useState("My Ether theme");
+  const [savedThemes, setSavedThemes] = useState<ThemeConfig[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("ether.themes") || "[]");
+    } catch {
+      return [];
+    }
+  });
+  const addressRef = useRef<HTMLInputElement>(null);
+  const host = useRef<HTMLDivElement>(null);
+  const liveTabs = useRef(new Set<string>());
+  const queue = useRef(Promise.resolve());
+  const engine =
+    profile.engine === "custom"
+      ? { name: "Custom search", template: profile.customEngine }
+      : ENGINES.find((e) => e.id === profile.engine) || ENGINES[0];
+  const update = (patch: Partial<Profile>) =>
+    setProfiles((ps) =>
+      ps.map((p) => (p.id === profile.id ? { ...p, ...patch } : p)),
+    );
+  function native(command: string, args: Record<string, unknown> = {}) {
+    if (!isTauri()) return Promise.resolve();
+    return invoke(command, args).catch((e) => {
+      setError(String(e));
+      throw e;
+    });
+  }
+  useEffect(() => {
+    try {
+      localStorage.setItem("ether.profiles", JSON.stringify(profiles));
+      localStorage.setItem("ether.active", profile.id);
+    } catch {
+      setError("Your local storage is full. Try a smaller profile icon.");
+    }
+    applyThemeToDOM(profile.theme);
+  }, [profiles, profile.id]);
+  useEffect(() => {
+    localStorage.setItem("ether.themes", JSON.stringify(savedThemes));
+  }, [savedThemes]);
+  useEffect(() => {
+    setAddress(tab.url);
+  }, [tab.id, tab.url]);
+  useEffect(() => {
+    if (!isTauri()) return;
+    const unlisten = listen<{
+      id: string;
+      url?: string;
+      title?: string;
+      loading?: boolean;
+      popup?: string;
+    }>("browser-update", ({ payload: p }) => {
+      if (p.popup) {
+        const t = {
+          ...newTab(),
+          url: p.popup,
+          title: new URL(p.popup).hostname,
+        };
+        setTabs((ts) => [...ts, t]);
+        setActive(t.id);
+        return;
+      }
+      setTabs((ts) =>
+        ts.map((t) =>
+          t.id === p.id
+            ? {
+                ...t,
+                ...(p.url ? { url: p.url } : {}),
+                ...(p.title ? { title: p.title } : {}),
+                ...(p.loading !== undefined ? { loading: p.loading } : {}),
+              }
+            : t,
+        ),
+      );
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, []);
+  useEffect(() => {
+    if (!isTauri()) return;
+    let cancelled = false;
+    queue.current = queue.current
+      .catch(() => {})
+      .then(async () => {
+        if (cancelled) return;
+        const r = host.current?.getBoundingClientRect();
+        if (!r) return;
+        if (tab.url && !liveTabs.current.has(tab.id)) {
+          await native("create_tab", {
+            id: tab.id,
+            profile: profile.id,
+            url: tab.url,
+            x: r.x,
+            y: r.y,
+            width: r.width,
+            height: r.height,
+          });
+          liveTabs.current.add(tab.id);
+        }
+        await native("show_tab", {
+          id: panel ? "" : tab.url ? tab.id : "",
+          x: r.x,
+          y: r.y,
+          width: r.width,
+          height: r.height,
+        });
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [tab.id, tab.url, panel, profile.id]);
+  useEffect(() => {
+    const resize = () => {
+      const r = host.current?.getBoundingClientRect();
+      if (r)
+        void native("resize_tabs", {
+          x: r.x,
+          y: r.y,
+          width: r.width,
+          height: r.height,
+        }).catch(() => {});
+    };
+    window.addEventListener("resize", resize);
+    return () => window.removeEventListener("resize", resize);
+  }, []);
+  function addTab() {
+    const t = newTab();
+    setTabs((ts) => [...ts, t]);
+    setActive(t.id);
+    setPanel("");
+    setQuery("");
+  }
+  function closeTab(id: string) {
+    if (liveTabs.current.has(id)) {
+      void native("close_tab", { id }).catch(() => {});
+      liveTabs.current.delete(id);
+    }
+    setTabs((ts) => {
+      const remaining = ts.filter((t) => t.id !== id);
+      return remaining.length ? remaining : [newTab()];
+    });
+  }
+  async function go(value: string) {
+    try {
+      const url = resolveAddress(value, engine.template);
+      setError("");
+      setPanel("");
+      if (liveTabs.current.has(tab.id))
+        await native("navigate", { id: tab.id, url });
+      setTabs((ts) =>
+        ts.map((t) =>
+          t.id === tab.id ? { ...t, url, title: new URL(url).hostname } : t,
+        ),
+      );
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+  function home() {
+    if (liveTabs.current.has(tab.id)) {
+      void native("close_tab", { id: tab.id }).catch(() => {});
+      liveTabs.current.delete(tab.id);
+    }
+    setTabs((ts) =>
+      ts.map((t) =>
+        t.id === tab.id ? { ...t, url: "", title: "New tab" } : t,
+      ),
+    );
+    setPanel("");
+  }
+  function switchProfile(id: string) {
+    tabs.forEach((t) => {
+      if (liveTabs.current.has(t.id))
+        void native("close_tab", { id: t.id }).catch(() => {});
+    });
+    liveTabs.current.clear();
+    setProfileId(id);
+    const t = newTab();
+    setTabs([t]);
+    setActive(t.id);
+    setPanel("");
+  }
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey) {
+        if (e.key === "l") {
+          e.preventDefault();
+          addressRef.current?.focus();
+          addressRef.current?.select();
+        }
+        if (e.key === "t") {
+          e.preventDefault();
+          addTab();
+        }
+        if (e.key === "w") {
+          e.preventDefault();
+          closeTab(tab.id);
+        }
+      }
+      if (e.key === "Escape") setPanel("");
+    };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, [tab.id]);
+  function bookmark() {
+    if (!tab.url) return;
+    const has = profile.bookmarks.some((b) => b.url === tab.url);
+    update({
+      bookmarks: has
+        ? profile.bookmarks.filter((b) => b.url !== tab.url)
+        : [...profile.bookmarks, { title: tab.title, url: tab.url }],
+    });
+  }
+  const icon = (p: Profile) =>
+    p.icon.startsWith("data:image/") ? (
+      <img className="avatar" src={p.icon} alt="" />
+    ) : (
+      <span className="avatar glyph">{p.icon}</span>
+    );
+  return (
+    <div className="app">
+      <aside className="rail">
+        <img className="rail-logo" src="/ether.svg" alt="Ether" />
+        <button aria-label="Home" title="Home" onClick={home}>
+          <Compass />
+        </button>
+        <button
+          aria-label="Bookmarks"
+          title="Bookmarks"
+          onClick={() => setPanel(panel === "bookmarks" ? "" : "bookmarks")}
+        >
+          <Star />
+        </button>
+        <div className="rail-line" />
+        <button
+          aria-label="Themes"
+          title="Themes"
+          onClick={() => setPanel("themes")}
+        >
+          <Palette />
+        </button>
+        <div className="rail-spacer" />
+        <button
+          aria-label="Settings"
+          title="Settings"
+          onClick={() => setPanel("settings")}
+        >
+          <Settings />
+        </button>
+        <button
+          aria-label="Profiles"
+          title="Profiles"
+          onClick={() => setPanel("profiles")}
+        >
+          {icon(profile)}
+        </button>
+      </aside>
+      <div className="workspace">
+        <header>
+          <div className="tabs" role="tablist" aria-label="Browser tabs">
+            {tabs.map((t) => (
+              <div
+                className={"tab " + (tab.id === t.id ? "selected" : "")}
+                key={t.id}
+              >
+                <button
+                  role="tab"
+                  aria-selected={tab.id === t.id}
+                  onClick={() => setActive(t.id)}
+                >
+                  <Globe size={13} />
+                  <span>{t.title}</span>
+                </button>
+                <button
+                  aria-label={"Close " + t.title}
+                  onClick={() => closeTab(t.id)}
+                >
+                  <X size={13} />
+                </button>
+              </div>
+            ))}
+            <button className="add-tab" aria-label="New tab" onClick={addTab}>
+              <Plus size={17} />
+            </button>
+            <span className="edition">
+              ETHER <span>PREVIEW</span>
+            </span>
+          </div>
+          <div className="toolbar">
+            <button
+              aria-label="Back"
+              disabled={!tab.url}
+              onClick={() =>
+                void native("tab_action", { id: tab.id, action: "back" }).catch(
+                  () => {},
+                )
+              }
+            >
+              <ArrowLeft />
+            </button>
+            <button
+              aria-label="Forward"
+              disabled={!tab.url}
+              onClick={() =>
+                void native("tab_action", {
+                  id: tab.id,
+                  action: "forward",
+                }).catch(() => {})
+              }
+            >
+              <ArrowRight />
+            </button>
+            <button
+              aria-label="Reload"
+              disabled={!tab.url}
+              onClick={() =>
+                void native("tab_action", {
+                  id: tab.id,
+                  action: "reload",
+                }).catch(() => {})
+              }
+            >
+              <RotateCw className={tab.loading ? "spinning" : ""} />
+            </button>
+            <button aria-label="Go home" onClick={home}>
+              <Home />
+            </button>
+            <form
+              className="address"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void go(address);
+              }}
+            >
+              <Globe size={15} />
+              <input
+                ref={addressRef}
+                aria-label="Address or search"
+                value={address}
+                onChange={(e) => setAddress(e.target.value)}
+                placeholder={`Search with ${engine.name} or enter address`}
+              />
+            </form>
+            <button
+              aria-label="Bookmark this page"
+              aria-pressed={profile.bookmarks.some((b) => b.url === tab.url)}
+              disabled={!tab.url}
+              onClick={bookmark}
+            >
+              <Star />
+            </button>
+            <button
+              className="profile-button"
+              onClick={() => setPanel("profiles")}
+            >
+              {icon(profile)}
+              <span>{profile.name}</span>
+            </button>
+          </div>
+          <div className="bookmark-bar">
+            {profile.bookmarks.map((b) => (
+              <button key={b.url} onClick={() => void go(b.url)}>
+                <span className="bookmark-dot" />
+                {b.title}
+              </button>
+            ))}
+          </div>
+        </header>
+        {error && (
+          <div role="alert" className="error">
+            {error}
+            <button aria-label="Dismiss error" onClick={() => setError("")}>
+              <X size={14} />
+            </button>
+          </div>
+        )}
+        <main ref={host} className="content">
+          {!tab.url ? (
+            <div className="start-page">
+              <div className="topline">
+                <span>YOUR WINDOW TO WHAT’S NEXT</span>
+                <span>arcaphyte.</span>
+              </div>
+              <section className="hero">
+                <div className="hero-copy">
+                  <div className="eyebrow">
+                    <span /> A LITTLE CURIOSITY. ENDLESS POSSIBILITY.
+                  </div>
+                  <h1>
+                    A world waiting
+                    <br />
+                    to be <em>discovered.</em>
+                  </h1>
+                  <p>
+                    Follow a thought. Find a new perspective.
+                    <br />
+                    Make a little room for the unexpected.
+                  </p>
+                  <form
+                    className="search"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      void go(query);
+                    }}
+                  >
+                    <Search size={20} />
+                    <input
+                      aria-label="Search the web"
+                      value={query}
+                      onChange={(e) => setQuery(e.target.value)}
+                      placeholder="Where will your curiosity take you?"
+                    />
+                    <button aria-label="Search" type="submit">
+                      <ArrowRight size={21} />
+                    </button>
+                  </form>
+                  <button
+                    className="engine-note"
+                    onClick={() => setPanel("settings")}
+                  >
+                    Searching with {engine.name} <Settings size={11} />
+                  </button>
+                </div>
+                <div className="crystal-scene">
+                  <div className="orbit one" />
+                  <div className="orbit two" />
+                  <span className="spark s1">+</span>
+                  <span className="spark s2">+</span>
+                  <img src="/ether.svg" alt="Faceted blue Ether crystal" />
+                  <span className="art-caption">
+                    04 / THE ARCAPHYTE COLLECTION
+                  </span>
+                </div>
+              </section>
+              <section className="shortcuts">
+                <div className="section-label">
+                  <span>FAMILIAR PLACES</span>
+                  <button onClick={() => setPanel("bookmarks")}>
+                    Your bookmarks <ArrowRight size={13} />
+                  </button>
+                </div>
+                <div className="shortcut-grid">
+                  {profile.bookmarks.map((b, i) => (
+                    <button
+                      className="shortcut"
+                      key={b.url}
+                      onClick={() => void go(b.url)}
+                    >
+                      <span className="shortcut-icon">
+                        {b.title.slice(0, 1)}
+                      </span>
+                      <div>
+                        <strong>{b.title}</strong>
+                        <small>{new URL(b.url).hostname}</small>
+                      </div>
+                      <ExternalLink size={14} />
+                    </button>
+                  ))}
+                  <button
+                    className="shortcut new"
+                    onClick={() => setPanel("bookmarks")}
+                  >
+                    <Plus size={21} />
+                    <span>Add a favorite</span>
+                  </button>
+                </div>
+              </section>
+              <footer>
+                <span>Thoughtfully made. Yours to make your own.</span>
+                <button onClick={() => setPanel("themes")}>
+                  <Palette size={14} /> Make Ether yours
+                </button>
+              </footer>
+            </div>
+          ) : (
+            <div className="web-placeholder">
+              {!isTauri() ? (
+                <>
+                  <Globe size={40} />
+                  <h2>Desktop browser preview</h2>
+                  <p>Websites open inside Chromium in the installed app.</p>
+                  <a href={tab.url} target="_blank" rel="noreferrer">
+                    Open this page in your browser <ExternalLink size={14} />
+                  </a>
+                </>
+              ) : (
+                <p>Loading {tab.title}…</p>
+              )}
+            </div>
+          )}
+          {panel && (
+            <div className="panel-backdrop">
+              <section
+                className="panel"
+                role="dialog"
+                aria-modal="true"
+                aria-label={panel}
+              >
+                <div className="panel-heading">
+                  <div>
+                    <span className="eyebrow">MAKE IT YOURS</span>
+                    <h2>
+                      {panel === "profiles"
+                        ? "Your own corner of the web"
+                        : panel === "themes"
+                          ? "A different point of view"
+                          : panel === "bookmarks"
+                            ? "Keep your favorite places"
+                            : "Set your direction"}
+                    </h2>
+                  </div>
+                  <button
+                    aria-label="Close settings"
+                    onClick={() => setPanel("")}
+                  >
+                    <X />
+                  </button>
+                </div>
+                {panel === "profiles" && (
+                  <>
+                    <p>
+                      Local profiles keep their own name, icon, settings,
+                      bookmarks, and browsing storage. No Arcaphyte account
+                      needed.
+                    </p>
+                    <div className="profile-list">
+                      {profiles.map((p) => (
+                        <button
+                          key={p.id}
+                          aria-pressed={p.id === profile.id}
+                          onClick={() => switchProfile(p.id)}
+                        >
+                          {icon(p)}
+                          {p.name}
+                        </button>
+                      ))}
+                      <button
+                        onClick={() => {
+                          const p = freshProfile();
+                          p.name = "New explorer";
+                          setProfiles((ps) => [...ps, p]);
+                          switchProfile(p.id);
+                        }}
+                      >
+                        <Plus size={16} />
+                        New profile
+                      </button>
+                    </div>
+                    <label>
+                      Profile name
+                      <input
+                        value={profile.name}
+                        maxLength={40}
+                        onChange={(e) => update({ name: e.target.value })}
+                      />
+                    </label>
+                    <label>
+                      Your icon
+                      <div className="icon-choices">
+                        {["✦", "☾", "❖", "✿", "◈", "☀"].map((s) => (
+                          <button key={s} onClick={() => update({ icon: s })}>
+                            {s}
+                          </button>
+                        ))}
+                      </div>
+                      <input
+                        aria-label="Upload profile icon"
+                        type="file"
+                        accept="image/png,image/jpeg,image/webp"
+                        onChange={(e) => {
+                          const f = e.target.files?.[0];
+                          if (!f) return;
+                          if (f.size > 1024 * 1024) {
+                            setError("Choose an icon smaller than 1 MB.");
+                            return;
+                          }
+                          const reader = new FileReader();
+                          reader.onload = () =>
+                            update({ icon: String(reader.result) });
+                          reader.readAsDataURL(f);
+                        }}
+                      />
+                    </label>
+                  </>
+                )}
+                {panel === "settings" && (
+                  <>
+                    <p>
+                      Choose the search engine used by the address bar and your
+                      start page.
+                    </p>
+                    <label>
+                      Search engine
+                      <select
+                        value={profile.engine}
+                        onChange={(e) => update({ engine: e.target.value })}
+                      >
+                        {ENGINES.map((e) => (
+                          <option key={e.id} value={e.id}>
+                            {e.name}
+                          </option>
+                        ))}
+                        <option value="custom">Custom search engine</option>
+                      </select>
+                    </label>
+                    {profile.engine === "custom" && (
+                      <label>
+                        HTTPS search URL — use {"{query}"} for your search
+                        <input
+                          value={profile.customEngine}
+                          onChange={(e) =>
+                            update({ customEngine: e.target.value })
+                          }
+                        />
+                        {!validTemplate(profile.customEngine) && (
+                          <small role="alert">
+                            Enter an HTTPS URL containing {"{query}"}.
+                          </small>
+                        )}
+                      </label>
+                    )}
+                    <div className="info-card">
+                      <h3>Arcaphyte Ether · 0.1 preview</h3>
+                      <p>
+                        Free to use. No sign-in or activation key. Built with
+                        React, Rust, Tauri, and Chromium.
+                      </p>
+                      <p>
+                        This early framework uses Tauri 3 alpha. The current
+                        Windows CEF runtime does not provide Chromium process
+                        sandboxing. Use this preview for testing, not sensitive
+                        everyday browsing.
+                      </p>
+                    </div>
+                  </>
+                )}
+                {panel === "themes" && (
+                  <>
+                    <p>
+                      The same palettes and typography as Weaver, with a little
+                      Ether of its own.
+                    </p>
+                    <div className="theme-grid">
+                      {[...presets, ...savedThemes].map((t) => (
+                        <button
+                          key={t.id}
+                          aria-pressed={profile.theme.id === t.id}
+                          onClick={() => update({ theme: t })}
+                        >
+                          <span
+                            className="theme-swatch"
+                            style={{ background: t.workspaceBg }}
+                          >
+                            <i style={{ background: t.accentColor }} />
+                            <i style={{ background: t.textPrimary }} />
+                            <i style={{ background: t.cardBg }} />
+                          </span>
+                          {t.name}
+                        </button>
+                      ))}
+                    </div>
+                    <h3>Make a custom theme</h3>
+                    <div className="color-grid">
+                      {(
+                        [
+                          "workspaceBg",
+                          "sidebarBg",
+                          "cardBg",
+                          "accentColor",
+                          "textPrimary",
+                          "textSecondary",
+                        ] as const
+                      ).map((k) => (
+                        <label key={k}>
+                          {
+                            {
+                              workspaceBg: "Background",
+                              sidebarBg: "Sidebar",
+                              cardBg: "Cards",
+                              accentColor: "Accent",
+                              textPrimary: "Text",
+                              textSecondary: "Secondary text",
+                            }[k]
+                          }
+                          <input
+                            type="color"
+                            value={profile.theme[k]}
+                            onChange={(e) =>
+                              update({
+                                theme: {
+                                  ...profile.theme,
+                                  [k]: e.target.value,
+                                  id: "custom-draft",
+                                  isCustom: true,
+                                },
+                              })
+                            }
+                          />
+                        </label>
+                      ))}
+                    </div>
+                    <label>
+                      Typography
+                      <select
+                        value={profile.theme.fontPresetId || "classic-literary"}
+                        onChange={(e) =>
+                          update({
+                            theme: applyFontPresetToTheme(
+                              profile.theme,
+                              e.target.value,
+                            ),
+                          })
+                        }
+                      >
+                        {FONT_PRESET_PAIRINGS.map((f) => (
+                          <option key={f.id} value={f.id}>
+                            {f.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <div className="inline">
+                      <input
+                        aria-label="Custom theme name"
+                        value={themeName}
+                        onChange={(e) => setThemeName(e.target.value)}
+                      />
+                      <button
+                        className="primary"
+                        onClick={() => {
+                          const t = {
+                            ...profile.theme,
+                            id: uid(),
+                            name: themeName.trim() || "Custom theme",
+                            isCustom: true,
+                          };
+                          setSavedThemes((ts) => [...ts, t]);
+                          update({ theme: t });
+                        }}
+                      >
+                        Save theme
+                      </button>
+                    </div>
+                  </>
+                )}
+                {panel === "bookmarks" && (
+                  <>
+                    <p>A few good starting points, always close at hand.</p>
+                    {profile.bookmarks.map((b) => (
+                      <div className="bookmark-row" key={b.url}>
+                        <button onClick={() => void go(b.url)}>
+                          <Globe size={17} />
+                          <span>
+                            {b.title}
+                            <small>{b.url}</small>
+                          </span>
+                        </button>
+                        <button
+                          aria-label={"Remove " + b.title}
+                          onClick={() =>
+                            update({
+                              bookmarks: profile.bookmarks.filter(
+                                (x) => x.url !== b.url,
+                              ),
+                            })
+                          }
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    ))}
+                    <form
+                      className="bookmark-form"
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        const f = new FormData(e.currentTarget);
+                        try {
+                          const url = resolveAddress(
+                            String(f.get("url")),
+                            engine.template,
+                          );
+                          update({
+                            bookmarks: [
+                              ...profile.bookmarks.filter((b) => b.url !== url),
+                              {
+                                url,
+                                title:
+                                  String(f.get("title")).trim() ||
+                                  new URL(url).hostname,
+                              },
+                            ],
+                          });
+                          e.currentTarget.reset();
+                        } catch (err) {
+                          setError(String(err));
+                        }
+                      }}
+                    >
+                      <label>
+                        Name
+                        <input name="title" required maxLength={60} />
+                      </label>
+                      <label>
+                        Website address
+                        <input name="url" required placeholder="https://" />
+                      </label>
+                      <button className="primary">Add bookmark</button>
+                    </form>
+                  </>
+                )}
+              </section>
+            </div>
+          )}
+        </main>
+      </div>
+    </div>
+  );
+}
+createRoot(document.getElementById("root")!).render(<App />);

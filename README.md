@@ -36,3 +36,9 @@ GitHub Actions builds Windows NSIS, Apple Silicon macOS DMG, and x64 Linux DEB/R
 
 Brand: https://www.arcaphyte.com
 
+
+## Native integration checks
+
+A dedicated test-only feature enables Chromium inspection on local port 9227 and uses a separate temporary CEF data directory. Build with `npm run tauri build -- --features browser-test --no-bundle`, launch that binary, and run `node scripts/native-check.mjs`. Close the test binary and rebuild without that feature afterward. Never distribute a build made with `browser-test`; the normal packaging workflow does not enable it.
+
+Validation performed for this preview: search URL/protocol checks, browser UI interactions and persistence, and Windows native Chromium navigation/profile-isolation checks. macOS and Linux native user-interface testing remains outstanding.
