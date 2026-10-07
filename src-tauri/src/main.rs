@@ -50,7 +50,10 @@ async fn close_tab(caller:Webview,app:tauri::AppHandle,id:String)->Result<(),Str
 async fn tab_action(caller:Webview,app:tauri::AppHandle,id:String,action:String)->Result<(),String>{trusted(&caller)?;let w=find(&app,&id)?;match action.as_str(){"back"=>w.go_back(),"forward"=>w.go_forward(),"reload"=>w.reload(),_=>return Err("Unknown browser action".into())}.map_err(|e|e.to_string())}
 #[tauri_runtime_cef::cef_entry_point]
 fn main(){
- tauri::Builder::default().runtime(tauri_runtime_cef::Cef::default())
+ let runtime = tauri_runtime_cef::Cef::default();
+ #[cfg(feature = "browser-test")]
+ let runtime = runtime.remote_debugging(tauri_runtime_cef::RemoteDebugging::Port { port: 9227, allowed_origins: vec![] }).root_cache_path(std::env::temp_dir().join("arcaphyte-ether-test-cef"));
+ tauri::Builder::default().runtime(runtime)
  .invoke_handler(tauri::generate_handler![create_tab,show_tab,resize_tabs,navigate,close_tab,tab_action])
  .run(tauri::generate_context!()).expect("Could not start Arcaphyte Ether");
 }
@@ -59,3 +62,4 @@ mod tests {use super::*;
  #[test]fn rejects_privileged_urls(){for value in ["file:///etc/passwd","javascript:alert(1)","http://tauri.localhost","https://user:pass@example.com"]{assert!(web_url(value).is_err());}assert!(web_url("https://example.com").is_ok());}
  #[test]fn rejects_path_traversal(){assert!(valid_id("../../main").is_err());assert!(valid_id("abc-123").is_ok());}
 }
+

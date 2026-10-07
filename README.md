@@ -32,6 +32,7 @@ npm run tauri build
 
 ## Distribution
 
-GitHub Actions builds Windows NSIS, Apple Silicon macOS DMG, and x64 Linux DEB/RPM/AppImage. Builds are unsigned until signing credentials are supplied; macOS is not notarized. CEF and other dependencies retain their own licenses; this repository does not grant a separate open-source license to Arcaphyte branding or application code.
+GitHub Actions builds Windows NSIS, Apple Silicon macOS DMG, and x64 Linux DEB/RPM. Builds are unsigned until signing credentials are supplied; macOS is not notarized. CEF and other dependencies retain their own licenses; this repository does not grant a separate open-source license to Arcaphyte branding or application code.
 
 Brand: https://www.arcaphyte.com
+
